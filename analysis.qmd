@@ -1,0 +1,164 @@
+---
+params:
+    comp_id: 2
+    season_id: 317
+    team_id: 33
+    n_games: 10
+    colour: '#034694'
+---
+
+```{r}
+#| echo: false
+#| include: false
+
+lapply(list.files('R', full.names = TRUE), source)
+# params <- list(
+#     comp_id = 2,
+#     season_id = 317,
+#     team_id = 33,
+#     n_games = 10,
+#     colour = '#034694'
+# )
+```
+
+## Get the data
+
+To run this code, first set your credentials in the environment variables SB_USER and SB_PASS. Or, change this to use the StatsBomb free data!
+
+```{r}
+#| warning: false
+#| message: false
+
+matches <- StatsBombR::get.matches(
+  Sys.getenv('SB_USER'),
+  Sys.getenv('SB_PASS'),
+  season_id = params$season_id,
+  competition_id = params$comp_id
+)
+
+team_name <- matches[matches$home_team.home_team_id == params$team_id,]$home_team.home_team_name[1]
+
+# slice to the last n games by the selected team
+match_ids <- matches |>
+  dplyr::filter(
+    home_team.home_team_id == params$team_id | away_team.away_team_id == params$team_id
+  ) |>
+  dplyr::mutate(match_date = as.Date(match_date)) |>
+  dplyr::arrange(dplyr::desc(match_date)) |>
+  dplyr::slice(1:params$n_games) |>
+  dplyr::pull(match_id)
+
+# pull out the match events for all the games
+match_events <- StatsBombR::allevents(
+  Sys.getenv('SB_USER'),
+  Sys.getenv('SB_PASS'),
+  matches = match_ids
+) |> 
+    StatsBombR::allclean()
+```
+
+## Goalkicks
+
+```{r}
+goalkicks <- match_events |> 
+    dplyr::filter(pass.type.name == 'Goal Kick', team.id == params$team_id) |> 
+    dplyr::mutate(
+        success = !is.na(pass.outcome.id)
+    ) |> 
+    dplyr::select(
+        x = location.x, y = location.y, end.x = pass.end_location.x, end.y = pass.end_location.y, success
+    )
+
+create_goalkick_chart(goalkicks, colour = params$colour) +
+    ggplot2::ggtitle(
+        label = paste0(team_name, ' Goalkick Zones'),
+        subtitle = paste0(
+            'Last ', params$n_games, ' Games'
+        )
+    )
+```
+
+## Team Passing In First Third
+
+```{r}
+for(pass.num in 1:3) {
+    passes <- match_events |> 
+        dplyr::filter(type.name == 'Pass') |> 
+        dplyr::group_by(match_id, possession) |> 
+        dplyr::mutate(
+            action_number = dplyr::row_number()
+        ) |> 
+        # just passes in the first third
+        dplyr::filter(
+            location.x[1] <= 40
+        ) |> 
+        dplyr::ungroup() |> 
+        dplyr::filter(
+            team.id == params$team_id, 
+            action_number == pass.num,
+            !is.na(pass.pass_cluster_id)
+        ) |> 
+        dplyr::select(
+            x = location.x, 
+            y = location.y,
+            end.x = pass.end_location.x,
+            end.y = pass.end_location.y, 
+            cluster = pass.pass_cluster_id
+        )
+
+    plot <- create_pass_clusters_chart(passes, colour = params$colour) +
+        ggplot2::ggtitle(
+            label = paste0(
+                team_name, 
+                ' First Third ', 
+                toOrdinal::toOrdinal(pass.num),
+                ' Passes'
+            ),
+            subtitle = paste0(
+                'Last ', params$n_games, ' Games'
+            )
+        )
+
+    print(plot)
+}
+```
+
+## Midfield Passes
+
+```{r}
+passes <- match_events |> 
+    dplyr::filter(
+        type.name == 'Pass',
+        team.id == params$team_id, 
+        !is.na(pass.pass_cluster_id),
+        position.id %in% c(9, 10, 11, 13, 14, 15)
+    ) |> 
+    dplyr::select(
+        player.name,
+        x = location.x, 
+        y = location.y,
+        end.x = pass.end_location.x,
+        end.y = pass.end_location.y, 
+        cluster = pass.pass_cluster_id
+    )
+
+for(player in unique(passes$player.name)) {
+    plot <- passes |> 
+        dplyr::filter(player.name == player) |> 
+        create_pass_clusters_chart(n.clust = 5, colour = params$colour) +
+        ggplot2::ggtitle(
+            label = paste0(
+                player, ' Most Common Passes'
+            ),
+            subtitle = paste0(
+                'Last ', params$n_games, ' Games'
+            )
+        )
+
+    print(plot)
+}
+```
+
+## Turning Radius
+
+## Gamestate
