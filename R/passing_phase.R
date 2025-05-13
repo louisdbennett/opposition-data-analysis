@@ -37,13 +37,13 @@ create_pass_clusters_chart <- function(passes, n.clust = 5, nbins = 1000, colour
         y = y,
         xend = end.x,
         yend = end.y,
-        colour = colour
+        colour = as.factor(cluster)
       ),
       arrow = ggplot2::arrow(length = ggplot2::unit(0.25, "cm")),
-      alpha = 0.6
+      alpha = 0.8
     ) +
     ggplot2::labs(
-      caption = "The heatmap in the background represents the locations of all passes"
+      caption = "The heatmap in the background represents the locations of all passes. The colour of passes represent the \'type\' of pass."
     ) +
     theme_tutorial(font = font) +
     ggplot2::theme(

@@ -5,6 +5,7 @@ params:
     team_id: 33
     n_games: 10
     colour: '#034694'
+    player_id: 38718
 ---
 
 ```{r}
@@ -60,6 +61,9 @@ match_events <- StatsBombR::allevents(
 ## Goalkicks
 
 ```{r}
+#| fig.width: 10
+#| fig.height: 8
+
 goalkicks <- match_events |> 
     dplyr::filter(pass.type.name == 'Goal Kick', team.id == params$team_id) |> 
     dplyr::mutate(
@@ -159,6 +163,153 @@ for(player in unique(passes$player.name)) {
 }
 ```
 
-## Turning Radius
+## Receiving On The Turn
+
+```{r}
+#| fig.width: 8
+#| fig.height: 8
+
+combinations <- match_events |>
+    dplyr::group_by(match_id) |>
+    dplyr::mutate(
+        reception_team.id = dplyr::if_else(type.name == 'Ball Receipt*', team.id, NA)
+    ) |>
+    tidyr::fill(reception_team.id, .direction = 'down') |>
+    dplyr::mutate(
+        reception_team.id = dplyr::if_else(is.na(reception_team.id), 0, reception_team.id)
+    ) |> 
+    dplyr::group_by(match_id, reception_team.id) |> 
+    dplyr::mutate(reception_number = cumsum(type.name == 'Ball Receipt*')) |> 
+    dplyr::filter(reception_number > 0) |> 
+    dplyr::group_by(match_id, reception_team.id, reception_number) |> 
+    dplyr::slice(1:3) |> 
+    dplyr::filter(
+        any(type.name == 'Pass'), type.name %in% c('Pass', 'Ball Receipt*')
+    )
+
+first_passes <- combinations |> 
+    dplyr::filter(type.name == 'Pass') |> 
+    dplyr::slice(1) |> 
+    dplyr::ungroup() |> 
+    dplyr::select(match_id, reception_team.id, reception_number, following_pass.id = id, player.id)
+
+receptions <- combinations |> 
+    dplyr::slice(1) |> 
+    dplyr::select(
+        match_id, 
+        reception_team.id, 
+        reception_number, 
+        location.x,
+        location.y,
+        team.id,
+        player.id,
+        player.name,
+        related_events
+    ) |> 
+    dplyr::mutate(
+        previous_pass.id = sapply(related_events, \(x) x[[1]])
+    ) |> 
+    dplyr::select(-related_events) |> 
+    dplyr::left_join(
+        first_passes, by = c('match_id', 'reception_team.id', 'reception_number', 'player.id')
+    ) |> 
+    dplyr::filter(!is.na(following_pass.id)) |> 
+    dplyr::left_join(
+        dplyr::select(
+            match_events, 
+            previous_pass.id = id,
+            previous_location.x = location.x, 
+            previous_location.y = location.y, 
+            previous_pass.angle = pass.angle
+        )
+    ) |> 
+    dplyr::left_join(
+        dplyr::select(
+            match_events, 
+            following_pass.id = id,
+            following_location.x = location.x, 
+            following_location.y = location.y, 
+            following_pass.end_location.x = pass.end_location.x, 
+            following_pass.end_location.y = pass.end_location.y, 
+            following_pass.angle = pass.angle
+        )
+    ) |> 
+    dplyr::filter(team.id == params$team_id, abs(previous_pass.angle) <= pi / 2) |> 
+    dplyr::mutate(
+        change_in_angle = (following_pass.angle - previous_pass.angle) %% (2 * pi) - pi
+    )
+
+player <- receptions |> dplyr::filter(player.id == params$player_id)
+
+create_passing_sonars(player, nbins = 20, colour = params$colour)
+```
+
+## Pressure Bar Charts
+
+```{r}
+#| fig.width: 8
+#| fig.height: 5
+
+under_pressure <- match_events |> 
+    dplyr::filter(under_pressure == TRUE, team.id == params$team_id, type.name == 'Pass')
+
+passing_under_pressure <- under_pressure |> 
+    dplyr::group_by(player.id, player.name) |> 
+    dplyr::summarise(
+        total_passes = dplyr::n(),
+        expected_passes = sum(pass.pass_success_probability, na.rm = TRUE),
+        complete_passes = sum(is.na(pass.outcome.id))
+    ) |> 
+    dplyr::filter(total_passes >= 20) |> 
+    dplyr::mutate(
+        average_pass_over_expectation = 10 * (complete_passes - expected_passes) / total_passes
+    )
+
+ggplot2::ggplot(passing_under_pressure) +
+    ggplot2::geom_bar(
+        ggplot2::aes(
+            y = reorder(player.name, average_pass_over_expectation), 
+            x = average_pass_over_expectation,
+            fill = average_pass_over_expectation
+        ),
+        colour = "#18191A", 
+        alpha = 0.9,
+        stat = 'identity'
+    ) +
+    ggplot2::scale_fill_gradient2(
+        guide = NULL, 
+        midpoint = 0, 
+        low = "#b41313",
+        mid = "#a1a1a1", 
+        high = "#007a3e"
+    ) +
+    ggplot2::xlab('Passes Completed Above Expected') +
+    theme_tutorial() +
+    ggplot2::theme(
+        axis.text.y = ggplot2::element_text(hjust = 1),
+        axis.text.x = ggplot2::element_text(),
+        axis.title.x = ggplot2::element_text(),
+    )
+```
 
 ## Gamestate
+
+```{r}
+#| fig.width: 8
+#| fig.height: 6
+
+gamestates <- StatsBombR::get.gamestate(match_events)[[1]] |> 
+    dplyr::group_by(
+        GameState, team.id
+    ) |> 
+    dplyr::summarise(
+        average_expected_passes = mean(pass.pass_success_probability, na.rm = TRUE),
+        average_pass_length = mean(pass.length, na.rm  =TRUE)
+    ) |> 
+    dplyr::filter(team.id == params$team_id)
+
+
+metrics <- c('Average Expected Pass' = 'average_expected_passes', 'Average Pass Length' = 'average_pass_length')
+
+create_gamestate_scatter(gamestates, metrics = metrics)
+```
